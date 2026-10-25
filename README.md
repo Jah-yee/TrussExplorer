@@ -16,8 +16,4 @@ Open index.html in a browser. Everything runs in the page; saved bridges stay in
 - src/app.js, src/ui.html: the interface
 - tests/: node tests, Playwright UI tests, cmp.py (compares with the course script). Paths inside the tests still point at the original build folder; set D at the top of each.
 
-## Before making this repo public
-- src/template.js embeds the course's TrussFEA_Bridge_SE310.py. Get the professor's permission or remove it from the public build.
-- Pick a licence.
-
 Full project documentation lives in the "[13] Truss Explorer" Google Drive folder (Standing Instructions, Technical Handoff, Tickets).
