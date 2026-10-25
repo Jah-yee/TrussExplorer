@@ -10,6 +10,7 @@ const check = checker();
 const shot = (p, name, el) => (el ? p.locator(el).screenshot({ path: path.join(SHOTS, name) }) : p.screenshot({ path: path.join(SHOTS, name) })).catch(() => {});
 
 async function section(name, fn) {
+  if (process.env.ONLY && !name.includes(process.env.ONLY)) return;   // ONLY=t66 node tests/ui/regressions.mjs
   console.log(`\n-- ${name}`);
   try { await fn(); } catch (e) { check(`${name} ran to the end`, false, e.message.split('\n')[0]); }
 }
@@ -160,6 +161,38 @@ try {
     check('pilot box does not overflow (notes shown)', await over() <= 1, (await over()).toFixed(1) + ' px');
     await shot(p, 't75-pilot.png', '#bigBox');
     check('t75: no script errors', p.errs.length === 0, p.errs.slice(0, 2).join(' | '));
+    await p.close();
+  });
+
+  // TE-063 (v59): a large search on a 2^37..2^53 space is interrupted, the page reloads, and Resume carries on
+  // with the exact walk: design numbers stay whole, inside the space and never repeat. Slow, so only with --slow.
+  if (slow) await section('TE-063 interrupted large search resumes', async () => {
+    const p = await openPage(b, srv.url, { width: 1600, height: 1000 }); await waitRows(p);
+    await p.evaluate(() => {
+      const set = (k, a, b2, s) => { const on = k === 'O' ? document.getElementById('swVaryOv') : document.getElementById('swOn' + k); if (!on.checked) on.click(); for (const [id, v] of [['sw' + k + '0', a], ['sw' + k + '1', b2], ['sw' + k + 's', s]]) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } };
+      set('H', 10, 100, 0.1); set('D', -60, 120, 0.1); set('O', 0, 50, 0.1); set('S', 0, 50, 0.05);
+      __dbg.S.bigCap = 150000;
+    });
+    await p.waitForTimeout(800);
+    const total = +(await p.textContent('#sweepCount')).replace(/[^0-9]/g, '');
+    check('space is between 2^37 and 2^53', total > 2 ** 37 && total < 2 ** 53, total.toLocaleString());
+    await p.$eval('#bigSearch', e => e.click()); await p.waitForSelector('#bigFull', { timeout: 200000 });
+    await p.click('#bigFull'); await p.waitForTimeout(300);
+    await p.fill('#bigHrs', '0').catch(() => {}); await p.$eval('#bigHrs', e => e.dispatchEvent(new Event('change'))).catch(() => {});
+    await p.click('#bigGo');
+    const ck = () => p.evaluate(() => new Promise(res => { const r = indexedDB.open('se310-truss', 1); r.onsuccess = () => { const q = r.result.transaction('big').objectStore('big').get('ckpt'); q.onsuccess = () => res(q.result ? { k: q.result.k, n: q.result.n, wv: q.result.wv, total: q.result.total } : null); }; }));
+    let c0 = null; for (let i = 0; i < 60 && !(c0 && c0.k > 0); i++) { await p.waitForTimeout(1000); c0 = await ck(); }
+    check('a checkpoint is saved during the run', c0 && c0.k > 0, c0 ? `at ${c0.k} of ${c0.n}` : 'none');
+    check('the checkpoint records the exact walk (wv 2)', c0 && c0.wv === 2);
+    await p.reload({ waitUntil: 'load' }); await p.waitForFunction(() => window.__dbg && __dbg.res, null, { timeout: 15000 });
+    await p.waitForSelector('#ckResume', { timeout: 30000 });
+    await p.click('#ckResume');
+    for (let i = 0; i < 100; i++) { await p.waitForTimeout(3000); if (/Full search:|Time limit|Cancelled/.test(await p.textContent('#sweepMsg'))) break; }
+    const msg = await p.textContent('#sweepMsg');
+    check('resumed search finishes', /Full search:/.test(msg), msg.slice(0, 120));
+    const r = await p.evaluate(T => { const ids = __dbg.rows.map(r => Number(r.idx)).filter(v => v === v); return { n: ids.length, whole: ids.every(Number.isInteger), inside: ids.every(v => v >= 0 && v < T), distinct: new Set(ids).size === ids.length }; }, total);
+    check('kept design numbers are whole, inside the space and distinct', r.n > 0 && r.whole && r.inside && r.distinct, JSON.stringify(r));
+    check('TE-063: no script errors', p.errs.length === 0, p.errs.slice(0, 2).join(' | '));
     await p.close();
   });
 
